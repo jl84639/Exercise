@@ -1,0 +1,472 @@
+---
+title: "Exercise 2"
+author: "Jinming Li Fan Ye Xiangmeng Qin"
+date: "2/28/2024"
+output: html_document
+---
+# ECO395M Homework 2
+### Jinming Li Fan Ye Xiangmeng Qin
+### 2/28/2024
+```{r prepare, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(ggplot2)
+library(rsample)  
+library(caret)
+library(modelr)
+library(parallel)
+library(foreach)
+library(mosaic)
+library(dplyr)
+library(ROCR)
+library(reshape2)
+library(gamlr)
+library(glmnet)
+library(lubridate)
+library(pROC)
+library(nnet)
+```
+
+## Problem1 Saratoga house prices
+
+```{r 1, include=FALSE}
+
+
+data(SaratogaHouses)
+
+glimpse(SaratogaHouses)
+
+####
+# Compare out-of-sample predictive performance
+####
+
+# Split into training and testing sets
+saratoga_split = initial_split(SaratogaHouses, prop = 0.8)
+saratoga_train = training(saratoga_split)
+saratoga_test = testing(saratoga_split)
+
+# Fit to the training data
+# Sometimes it's easier to name the variables we want to leave out
+# The command below yields exactly the same model.
+# the dot (.) means "all variables not named"
+# the minus (-) means "exclude this variable"
+lm1 = lm(price ~ lotSize + bedrooms + bathrooms, data=saratoga_train)
+lm2 = lm(price ~ . - pctCollege - sewer - waterfront - landValue - newConstruction, data=saratoga_train)
+lm3 = lm(price ~ (. - pctCollege - sewer - waterfront - landValue - newConstruction)^2, data=saratoga_train)
+
+coef(lm1) %>% round(0)
+coef(lm2) %>% round(0)
+coef(lm3) %>% round(0)
+
+# Predictions out of sample
+# Root mean squared error
+rmse(lm1, saratoga_test)
+rmse(lm2, saratoga_test)
+rmse(lm3, saratoga_test)
+
+# Can you hand-build a model that improves on all three?
+# Remember feature engineering, and remember not just to rely on a single train/test split
+
+out = do(100)*{
+  saratoga_split = initial_split(SaratogaHouses, prop = 0.8)
+  saratoga_train = training(saratoga_split)
+  saratoga_test = testing(saratoga_split)
+  lm2 = lm(price ~ (. - pctCollege - sewer - waterfront - landValue -
+                      newConstruction), data=saratoga_train)
+  lm3 = lm(price ~ (. - pctCollege - sewer - waterfront - landValue -
+                      newConstruction)^2, data=saratoga_train)
+  rmse2 = rmse(lm2, saratoga_test)
+  rmse3 = rmse(lm3, saratoga_test)
+  c(rmse2, rmse3)
+}
+
+colMeans(out)
+
+# Continue for Q1
+# Continue from the existing saratoga_lm.R script
+set.seed(123) # for reproducibility
+
+# Linear Model
+# Check for missing values in training set
+sum(is.na(saratoga_train))
+
+# Feature Engineering: Include polynomial terms and interactions if needed
+# Create a squared term for age and an interaction term between livingArea and bathrooms
+saratoga_train$age_squared <- saratoga_train$age^2
+saratoga_train$area_bath_interaction <- saratoga_train$livingArea * saratoga_train$bathrooms
+
+# Model Selection: Use stepwise selection, Lasso or Ridge regression to identify significant variables
+library(MASS)
+full_model <- lm(price ~ ., data=saratoga_train)
+step_model <- stepAIC(full_model, direction="both")
+
+# Model Evaluation using cross-validation
+library(caret)
+cv_results <- train(price ~ ., data=saratoga_train, method="lm", trControl=trainControl("cv", number=10))
+print(sqrt(cv_results$results$RMSE)) # Print the RMSE
+
+library(class) # For KNN
+library(caret) # For cross-validation
+
+# Data Preprocessing: Standardize the continuous variables
+preproc <- preProcess(saratoga_train[, c("lotSize", "age", "landValue", "livingArea", "pctCollege", "bedrooms", "fireplaces", "bathrooms", "rooms")])
+saratoga_train_norm <- predict(preproc, saratoga_train)
+
+# Hyperparameter Tuning
+tune_grid <- expand.grid(k = 1:20) # Assuming we want to test k from 1 to 20
+knn_results <- train(price ~ ., data=saratoga_train_norm, method="knn", tuneGrid=tune_grid, trControl=trainControl("cv", number=10))
+
+# Choose the best k
+best_k <- knn_results$bestTune$k
+
+# Model Evaluation: Calculate RMSE using cross-validation
+knn_rmse <- sqrt(knn_results$results$RMSE)
+
+# Compare RMSE of both models
+print(paste("Linear Model RMSE:", cv_results$results$RMSE))
+print(paste("KNN Model RMSE:", knn_rmse))
+```
+
+```{r 1', message=FALSE, echo=FALSE, warning=FALSE}
+# Compare RMSE of both models
+print(paste("Linear Model RMSE:", cv_results$results$RMSE))
+print(paste("KNN Model RMSE:", knn_rmse))
+```
+
+### Report:
+### Result from linear model and KNN model
+
+The initial class exercise provided three linear models with the following out-of-sample RMSE results:
+- **Linear Model lm1**: RMSE of 72,362.31
+- **Linear Model lm2**: RMSE of 60,071.69
+- **Linear Model lm3**: RMSE of 65,419.68
+
+The new linear model we use is: 
+
+price=β0 +β1×livingArea+β2×bathrooms+β3×age^2+β4×(livingArea×bathrooms)+...+ϵ, where "..." includes all the other variables present in the dataset as part of the initial full model. For the linear model, we applied feature engineering to create polynomial terms and interactions, notably a squared term for the age of the houses and an interaction term between living area and bathrooms.
+
+After ran 20 times with randomly spilt samples, our linearmedium model's RMSE is 57632.900565926 which is smaller than the RMSE of lm1, lm2, and lm3, indicating it outperforms the "medium" model that we considered in class. 
+
+Subsequently, we developed a KNN model that incorporated standardized variables to address scale disparities. The performance of the KNN model was markedly superior, with an RMSE averaging approximately 263.5 across different runs. This stark difference indicates a substantial improvement over the linear models.
+
+### Conclusion
+
+The KNN model consistently achieved a lower RMSE, indicating a more precise prediction of property values. The decrease in RMSE indicates that the KNN model's enhanced predictive capability and adaptability to non-linear relationships within the data. We advise the adoption of the KNN regression model for the determination of property market values within Saratoga County. It is more accurate and thus more likely to result in more reliable property valuations for tax assessment purposes.
+
+
+### Appendix: Technical Details
+The linear model incorporated advanced features, including age squared and an interaction term between living area and bathrooms, which were selected based on their potential impact on the house price. The KNN model's preprocessing included scaling of both continuous and categorical variables.
+
+
+## Problem2 Classification and retrospective sampling
+
+```{r problem 2.1, message=FALSE, echo=FALSE, warning=FALSE}
+
+credit=read.csv('german_credit.csv')
+
+# group by history and calculate and calculate average default value 
+default=credit %>%
+  group_by(history) %>%
+  summarize(average_default=mean(Default)) 
+#draw a  bar plot
+default %>%
+  ggplot(aes(x=history, y=average_default, fill=history)) +
+  geom_col()+
+  labs(x="Credit history",
+       y="Default probability",
+       title="Predictng default probability by credit history ",
+       subtitle="(german_credit)") + 
+  theme_bw() +
+theme(plot.title = element_text(face="bold", hjust=0.5))
+```
+
+**Figure 1:**
+
+Bar plot showing average default probability by credit history. We can see that among the three levels, loans with "Good" credit history have the highest default rate, while loans with "Terrible" credit history have the lowest default rate, indicating that a better credit history is associated with a higher loan default rate.
+
+```{r problem 2.2, message=FALSE, echo=FALSE, warning=FALSE}
+credit$installment <- factor(credit$installment)
+
+set.seed(100)
+# split training and testing data
+credit_split=initial_split(credit, prop= 0.8)
+credit_train=training(credit_split)
+credit_test=testing(credit_split)
+
+# logistic regression
+logistic=glm(Default ~ duration+amount+installment+age+history+purpose+foreign, data=credit_train, family=binomial)
+
+coef(logistic)%>% round(2)
+
+phat_test = predict(logistic, newdata = credit_test) 
+yhat_test = ifelse(phat_test > 0.5, 1, 0)
+confusion_out_logit = table(y = credit_test$Default, yhat = yhat_test)
+confusion_out_logit 
+
+# count values by history group
+num_good <- sum(credit$history == "good")
+print(paste("Number of 'good'= ", num_good))
+num_poor <- sum(credit$history == "poor")
+print(paste("Number of 'poor'  = ", num_poor))
+num_terrible <- sum(credit$history == "terrible") 
+print(paste("Number of 'terrible'= ", num_terrible))
+
+```
+### What do you notice about the history variable vis-a-vis predicting defaults?
+
+We can observe a significant disparity between category counts, suggesting that the oversampling of certain specific categories within the data could be a potential reason for counter-intuitive statistical results. Loans marked with "good" credit history are underrepresented in the dataset, and a large portion of them are defaulted loans. 
+
+If the bank primarily focuses on borrowers with poor and very poor credit ratings when selecting samples, then the predictive model is likely to be biased towards predicting a high probability of default. Such bias means that the model's predictions may not accurately reflect the actual situation because it does not take into account a broader and more diverse range of borrower types. 
+
+To improve the accuracy of the predictive model, it is advisable for the bank to use random sampling methods to collect data, or at least to use a much larger sample size. This would include more borrowers with good and fair credit, providing a more balanced dataset to train the predictive model and better estimate the probability of default.
+
+### Do you think this data set is appropriate for building a predictive model of defaults
+
+NO
+
+138/200=0.69
+
+A dissatisfying accuracy rate of 69% may indicate reasonable relationships between certain characteristics, but there seems to be elements within the data inhibiting successful predictions, as the intuitive response to predicting whether someone is likely to default (i.e., fail to repay a loan) does not align with the analytical outcomes. 
+
+The current dataset is unsuitable for predicting the "high" or "low" probability of borrower defaults due to biased sample selection. If the bank focuses on selecting samples mainly from borrowers with poor and very poor credit ratings, the predictive model is biased towards forecasting a high probability of default. This bias implies that the model's predictions may not accurately reflect reality as it fails to consider a wider and more diverse type of borrower. Additionally, the vast disparity in category counts suggests that oversampling of specific categories in the data could be a potential reason for the counter-intuitive statistical results.
+
+To improve the accuracy of the predictive model, it is recommended that the bank employs a method of random sample selection when collecting data, or at least utilizes a much larger sample size. This approach would include more borrowers with good and average credit, providing a more balanced dataset to train the predictive model, thus enabling it to better estimate the probability of defaults.
+
+
+## Problem3 Children and hotel reservations
+
+```{r 3.1, echo=FALSE,message=FALSE, warning=FALSE}
+
+hotels_dev <- read_csv("hotels_dev.csv")
+hotels_val <- read_csv("hotels_val.csv")
+```
+
+### Model Building
+
+First, we prepare for the data and build the baseline model.
+```{r model building, echo=FALSE, warning=FALSE}
+##prep work in data, Split into training and testing sets
+hotels_dev_split = initial_split(hotels_dev, prop = 0.8)
+hotels_dev_train = training(hotels_dev_split)
+hotels_dev_test = testing(hotels_dev_split)
+# Model Building 
+## baseline 1
+hotel_baseline1 = glm(children ~ market_segment + adults + customer_type + is_repeated_guest, data = hotels_dev_train, family = binomial)
+## baseline 2
+hotel_baseline2 = glm(children ~ .-arrival_date , data = hotels_dev_train, family = binomial)
+```
+
+We will then calculate the confusion matrix to look at our out-of-sample performance.
+Normally, we should choose t=0.5 as the predicted probabilties. But after several test, we consider it would be better for the hotels to place a high priority on not missing any bookings that might have children. As a result, we choose t=0.4 here.
+
+```{r  best model, echo=FALSE, warning=FALSE}
+#out of sample performance for model 1, t=0.4
+phat_baseline1 = predict(hotel_baseline1, hotels_dev_test, type = "response")
+yhat_baseline1 = ifelse(phat_baseline1>0.4, 1, 0)
+confusion_baseline1 = table(y = hotels_dev_test$children, yhat = yhat_baseline1)
+#out of sample performance for model 2, t=0.4
+phat_baseline2 = predict(hotel_baseline2, hotels_dev_test, type = "response")
+yhat_baseline2 = ifelse(phat_baseline2>0.4, 1, 0)
+confusion_baseline2 = table(y = hotels_dev_test$children, yhat = yhat_baseline2)
+##best model
+hotel_bestM = glm(children ~ . - arrival_date + stays_in_weekend_nights:distribution_channel + is_repeated_guest:distribution_channel + adults:is_repeated_guest +  adults:stays_in_weekend_nights + stays_in_weekend_nights:customer_type + customer_type:adults, data = hotels_dev_train, family = binomial)
+#out of sample performance for the BEST model
+phat_best = predict(hotel_bestM, hotels_dev_test, type = "response")
+yhat_best = ifelse(phat_best>0.4, 1, 0)
+confusion_best = table(y = hotels_dev_test$children, yhat = yhat_best)
+```
+
+Our linear probability model had the out-of-sample accuracy rate as a percentage:
+
+```{r output confusion, echo=FALSE}
+#Out put of the ratio
+confusion_baseline1
+confusion_baseline2
+confusion_best
+round(sum(diag(confusion_baseline1))/sum(confusion_baseline1) * 100, 2)
+round(sum(diag(confusion_baseline2))/sum(confusion_baseline2) * 100, 2)
+round(sum(diag(confusion_best))/sum(confusion_best) * 100, 2)
+```
+
+### Model Validation
+
+Validate the model from hotels_val, and generated a ROC curve with threshold of 0.01 to 0.95. 
+
+Showed as:
+
+```{r Model Validation: Step 1, echo=FALSE, warning=FALSE}
+# validate the model using the fresh val data
+phat_best_val = predict(hotel_bestM, hotels_val, type = "response")
+# ROC curve plotting
+t = rep(1:95)/100
+## Calculating TPR and FPR for Each Threshold
+roc_plot = foreach(t = t, .combine='rbind')%do%{
+  yhat_best_val = ifelse(phat_best_val >= t, 1, 0)
+  confusion_best_val = table(y=hotels_val$children, yhat=yhat_best_val)
+  TPR = confusion_best_val[2,2]/(confusion_best_val[2,2]+confusion_best_val[2,1])
+  FPR = confusion_best_val[1,2]/(confusion_best_val[1,1]+confusion_best_val[1,2]) 
+  c(t=t, TPR = TPR, FPR = FPR)
+} %>% as.data.frame()
+## Plotting the ROC Curve
+ggplot(roc_plot) +
+  geom_line(aes(x=FPR, y=TPR)) +
+  labs(y="TPR(t)", x = "FPR(t)", title = "ROC Curve for the Best Model")+
+  theme(plot.title = element_text(hjust = 1, face = "bold"))
+```
+
+From the plot we can see that the optimal threshold is between 0.15-0.2
+
+```{r Model Validation: Step 2, echo=FALSE, warning=FALSE}
+# Data Preparation with Fold Assignment
+hotel_cv = hotels_val %>%
+  mutate(fold = rep(1:20, length=nrow(hotels_val))%>%sample())
+# 20-Fold Cross-Validation
+hotel_cv = foreach(i = 1:20, .combine='rbind')  %do% {
+  hotel_cv_test = filter(hotel_cv, fold == i)
+  hotel_cv_train = filter (hotel_cv, fold != i)
+  hotel_cv_model = glm(children ~ .+ stays_in_weekend_nights:distribution_channel + is_repeated_guest:distribution_channel + adults:is_repeated_guest +  adults:stays_in_weekend_nights + stays_in_weekend_nights:customer_type + customer_type:adults, data = hotel_cv_train[,!colnames(hotel_cv_train)%in% c("arrival_date")], family = binomial)
+  hotel_cv_phat = predict(hotel_cv_model, hotel_cv_test, type = "response")
+  c(y=sum(hotel_cv_test$children), y_hat=sum(hotel_cv_phat), fold =i)
+} %>% as.data.frame()
+
+# Plotting Expected vs. Actual Bookings:
+plot(hotel_cv$y_hat, hotel_cv$y, main = "Actual & Expected number of bookings With Children",
+     xlab = "Expected number of bookings With Children", 
+     ylab = "Actual number of bookings With Children", 
+     pch = 19,
+     xlim = c(10,30), ylim = c(10,30))
+fit <- lm(hotel_cv$y ~ hotel_cv$y_hat)
+abline(fit, col = "blue")
+abline(a = 0, b = 1, col = "yellow", lty = 2)
+legend("topleft", legend = c("Line of Best Fit", "y = x"),
+       col = c("blue", "yellow"), lty = 1:2, cex = 0.8)
+
+# Calculating and Displaying Prediction Error
+hotel_cv <- hotel_cv %>%
+  mutate(diff = abs(y_hat - y)  )
+mean(hotel_cv$diff)
+```
+The difference between the expected number of bookings with children and the actual number of bookings with children is `r mean(hotel_cv$diff)`. 
+
+From the scatter plot, we can see that the line of best fit does not coincide with the identity line (y=x), which would represent perfect prediction. Instead, it is above the identity line. This indicates that the model tends to predict a higher number of bookings with children than actually occurred.
+In a word, the model's predictions can be described as approximate.
+
+```{r label, echo=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE, 
+                      out.width = "75%", out.height = "75%")
+options(width = 75)
+```
+
+
+
+## Problem4 Mushroom classification
+
+In this sector,our goal is to build a model that can accurately predict the likelihood of a mushroom being poisonous based on various descriptive features. 
+
+Since these features are categorical (such as odor or bruises), they don't have a natural numerical representation that a mathematical model could process. To overcome this, we transform these categories into a format that the model can understand using a technique called one-hot encoding. 
+
+In this specific case, we've removed the 'veil.type' feature before training our model. This decision was made because every mushroom in our dataset has the same 'veil.type' value, meaning this feature doesn't vary and hence cannot provide any useful information for distinguishing between poisonous and non-poisonous mushrooms.
+
+Once we've numerically encoded our categorical data and deleted unnecessary data, we employ a statistical method known as lasso-penalized logistic regression which is suitable for binary outcomes like 'poisonous' vs 'non-poisonous', and the 'lasso' part refers to a penalty applied to the model that has the effect of streamlining the final model.
+
+After changing the category features into numbers and picking out the important ones with the lasso method, we get a better model that can spot the key signs of a poisonous mushroom. The generated plot is as followed:
+
+
+```{r 4-1}
+mushroom = read.csv('mushrooms.csv')
+
+#View data
+mushroom %>%
+select_if(~is.factor(.) | is.character(.)) %>%
+map(~unique(.)) %>%
+walk2(names(.), ~cat("Levels for", .y, ":", .x, "\n"))
+
+# delete veil.type (only one level)
+mushroom = subset(mushroom, select = -c(veil.type))
+mushroom <- mushroom %>%
+  mutate_if(is.character, as.factor)
+
+# Split into training and testing sets
+set.seed(123)
+mushroom_split = initial_split(mushroom, prop = 0.8)
+mushroom_train = training(mushroom_split)
+mushroom_test = testing(mushroom_split)
+
+# Label the future
+mushroom_x = model.matrix(class ~ . -1, data=mushroom_train)
+mushroom_y = mushroom_train$class
+mushroom_lasso = gamlr(mushroom_x, mushroom_y, family="binomial")
+par(mar=c(5.1, 4.1, 4.1, 2.1))
+colors <- rainbow(nrow(mushroom_x))
+
+# optimal lambda
+optimal_lambda = log(mushroom_lasso$lambda[which.min(AICc(mushroom_lasso))])
+optimal_lambda
+
+plot(mushroom_lasso, main="LASSO Coefficient Paths", xlab="Log Lambda", ylab="Coefficient",
+     col=colors, lwd=0.5)+
+abline(v=optimal_lambda, col="black", lwd=2, lty=2)+
+text(x=optimal_lambda, y=par("usr")[3], labels=paste("Optimal lambda:\n", round(optimal_lambda, 2)), 
+     pos=4, col="black", cex=0.9)
+```
+
+Select non-zero variables:
+
+```{r 4-2, echo=FALSE, warning=FALSE}
+
+# coef
+mushroom_beta = coef(mushroom_lasso) %>% 
+  as.matrix() %>%
+  as.data.frame() %>%
+  filter(seg100 != 0)
+selected = rownames(mushroom_beta)
+selected
+
+```
+
+Generate predicted probabilities of whether a mushroom is poisonous. Then evaluate the out-of-sample performance by generating a ROC curve as follow:
+
+```{r 4-3, echo=FALSE, warning=FALSE}
+
+# prediction
+mushroom_x_test = model.matrix(class ~ . -1, data=mushroom_test)
+phat_mushroom = predict(mushroom_lasso, mushroom_x_test, type='response')
+
+# ROC curve
+roc_obj <- roc(mushroom_test$class, phat_mushroom)
+plot(roc_obj, main="ROC Curve")
+
+```
+
+The probability threshold for declaring a mushroom poisonous is: 
+
+```{r 4-4, echo=FALSE, warning=FALSE}
+
+#Find optimal threshold
+optimal_coords <- coords(roc_obj, "best", ret="threshold")
+optimal_threshold <- optimal_coords[1,1]
+optimal_threshold
+
+```
+
+From the confusion matrix below we can see that there are no cases where edible mushrooms were incorrectly predicted as poisonous (False Positives), as indicated by the zero in the e row and 1 column.There are 2 cases where poisonous mushrooms were incorrectly predicted as edible (False Negatives).
+
+In a word,the True Positive Rate (Sensitivity or Recall) is approximately 99.74%, indicating that nearly all poisonous mushrooms were correctly identified.
+
+```{r 4-5, echo=FALSE, warning=FALSE}
+
+#Comparasion of TPR and FPR
+yhat_mushroom = ifelse(phat_mushroom > optimal_threshold, 1, 0)
+confusion_mushroom = table(y = mushroom_test$class, 
+                           yhat = yhat_mushroom)
+confusion_mushroom
+
+TPR <- confusion_mushroom["p","1"] / (confusion_mushroom["p","1"] + confusion_mushroom["p","0"])
+FPR <- confusion_mushroom["e","1"] / (confusion_mushroom["e","1"] + confusion_mushroom["e","0"])
+cat("True Positive Rate:", TPR, "\n")
+cat("False Positive Rate:", FPR, "\n")
+```
+
+In summary, the model demonstrates high accuracy and specificity. However, the ultimate assessment of whether this is a good model also depends on the cost of misclassification, its generalizability to unseen data, and whether it meets the specific needs of its application. If the stakes are high, such as in health or safety applications, even a small number of false negatives may be significant, and further investigation into those cases would be warranted.
+
+
